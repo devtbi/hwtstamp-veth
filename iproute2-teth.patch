@@ -1,0 +1,135 @@
+diff --git a/ip/Makefile b/ip/Makefile
+index 4cad619c..2a1dec0f 100644
+--- a/ip/Makefile
++++ b/ip/Makefile
+@@ -4,7 +4,7 @@ IPOBJ=ip.o ipaddress.o ipaddrlabel.o iproute.o iprule.o ipnetns.o \
+     ipmaddr.o ipmonitor.o ipmroute.o ipprefix.o iptuntap.o iptoken.o \
+     ipxfrm.o xfrm_state.o xfrm_policy.o xfrm_monitor.o iplink_dummy.o \
+     iplink_ifb.o iplink_nlmon.o iplink_team.o iplink_vcan.o iplink_vxcan.o \
+-    iplink_vlan.o link_veth.o link_gre.o iplink_can.o iplink_xdp.o \
++    iplink_vlan.o link_veth.o link_teth.o link_gre.o iplink_can.o iplink_xdp.o \
+     iplink_macvlan.o ipl2tp.o link_vti.o link_vti6.o link_xfrm.o \
+     iplink_vxlan.o tcp_metrics.o iplink_ipoib.o ipnetconf.o link_ip6tnl.o \
+     link_iptnl.o link_gre6.o iplink_bond.o iplink_bond_slave.o iplink_hsr.o \
+diff --git a/ip/ipaddress.c b/ip/ipaddress.c
+index 571346b1..5da89dd1 100644
+--- a/ip/ipaddress.c
++++ b/ip/ipaddress.c
+@@ -74,7 +74,7 @@ static void usage(void)
+ 		"CONFFLAG  := [ home | nodad | mngtmpaddr | noprefixroute | autojoin ]\n"
+ 		"LIFETIME := [ valid_lft LFT ] [ preferred_lft LFT ]\n"
+ 		"LFT := forever | SECONDS\n"
+-		"TYPE := { vlan | veth | vcan | vxcan | dummy | ifb | macvlan | macvtap |\n"
++		"TYPE := { vlan | veth | teth | vcan | vxcan | dummy | ifb | macvlan | macvtap |\n"
+ 		"          bridge | bond | ipoib | ip6tnl | ipip | sit | vxlan | lowpan |\n"
+ 		"          gre | gretap | erspan | ip6gre | ip6gretap | ip6erspan | vti |\n"
+ 		"          nlmon | can | bond_slave | ipvlan | geneve | bridge_slave |\n"
+diff --git a/ip/iplink.c b/ip/iplink.c
+index d6b766de..cf54f668 100644
+--- a/ip/iplink.c
++++ b/ip/iplink.c
+@@ -121,7 +121,7 @@ void iplink_usage(void)
+ 			"\n"
+ 			"	ip link help [ TYPE ]\n"
+ 			"\n"
+-			"TYPE := { vlan | veth | vcan | vxcan | dummy | ifb | macvlan | macvtap |\n"
++			"TYPE := { vlan | veth | teth | vcan | vxcan | dummy | ifb | macvlan | macvtap |\n"
+ 			"	   bridge | bond | team | ipoib | ip6tnl | ipip | sit | vxlan |\n"
+ 			"	   gre | gretap | erspan | ip6gre | ip6gretap | ip6erspan |\n"
+ 			"	   vti | nlmon | team_slave | bond_slave | bridge_slave |\n"
+diff --git a/ip/link_teth.c b/ip/link_teth.c
+new file mode 100644
+index 00000000..ec5ae7fb
+--- /dev/null
++++ b/ip/link_teth.c
+@@ -0,0 +1,90 @@
++/*
++ * code based on ip/link_veth.c, only modified to support different module name
++ *
++ * Original Source Code Repository: git://git.kernel.org/pub/scm/linux/kernel/git/shemminger/iproute2.git 
++ *
++ * link_teth.c	teth driver module
++ *
++ *		This program is free software; you can redistribute it and/or
++ *		modify it under the terms of the GNU General Public License
++ *		as published by the Free Software Foundation; either version
++ *		2 of the License, or (at your option) any later version.
++ *
++ * Authors:	Pavel Emelianov <xemul@openvz.org>
++ *
++ */
++
++#include <string.h>
++#include <net/if.h>
++#include <linux/veth.h>
++
++#include "utils.h"
++#include "ip_common.h"
++
++static void print_usage(FILE *f)
++{
++	printf("Usage: ip link <options> type teth [peer <options>]\n"
++	       "To get <options> type 'ip link add help'\n");
++}
++
++static void usage(void)
++{
++	print_usage(stderr);
++}
++
++static int teth_parse_opt(struct link_util *lu, int argc, char **argv,
++			  struct nlmsghdr *n)
++{
++	char *type = NULL;
++	int err;
++	struct rtattr *data;
++	struct ifinfomsg *ifm, *peer_ifm;
++	unsigned int ifi_flags, ifi_change, ifi_index;
++
++	if (strcmp(argv[0], "peer") != 0) {
++		usage();
++		return -1;
++	}
++
++	ifm = NLMSG_DATA(n);
++	ifi_flags = ifm->ifi_flags;
++	ifi_change = ifm->ifi_change;
++	ifi_index = ifm->ifi_index;
++	ifm->ifi_flags = 0;
++	ifm->ifi_change = 0;
++	ifm->ifi_index = 0;
++
++	data = addattr_nest(n, 1024, VETH_INFO_PEER);
++
++	n->nlmsg_len += sizeof(struct ifinfomsg);
++
++	err = iplink_parse(argc - 1, argv + 1, (struct iplink_req *)n, &type);
++	if (err < 0)
++		return err;
++
++	if (type)
++		duparg("type", argv[err]);
++
++	peer_ifm = RTA_DATA(data);
++	peer_ifm->ifi_index = ifm->ifi_index;
++	peer_ifm->ifi_flags = ifm->ifi_flags;
++	peer_ifm->ifi_change = ifm->ifi_change;
++	ifm->ifi_flags = ifi_flags;
++	ifm->ifi_change = ifi_change;
++	ifm->ifi_index = ifi_index;
++
++	addattr_nest_end(n, data);
++	return argc - 1 - err;
++}
++
++static void teth_print_help(struct link_util *lu, int argc, char **argv,
++			    FILE *f)
++{
++	print_usage(f);
++}
++
++struct link_util teth_link_util = {
++	.id = "teth",
++	.parse_opt = teth_parse_opt,
++	.print_help = teth_print_help,
++};
