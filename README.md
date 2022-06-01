@@ -3,3 +3,4 @@ Linux virtual ethernet interface with basic emulated hardware timestamping capab
 
 # Preconditions
 - Linux Kernel 5.13.0
+- Installed linux-headers package for kernel
